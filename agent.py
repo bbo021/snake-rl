@@ -7,17 +7,12 @@ import time
 import pickle
 from collections import deque
 import json
-import tensorflow as tf
-from tensorflow.keras.regularizers import l2
-from tensorflow.keras.optimizers import RMSprop, SGD, Adam
-import tensorflow.keras.backend as K
-from tensorflow.keras.layers import Input, Conv2D, Flatten, Dense, Softmax, MaxPool2D
-from tensorflow.keras import Model
-from tensorflow.keras.regularizers import l2
-# from tensorflow.keras.losses import Huber
+import torch
+import torch.nn as nn
+import dqn_torch
 
-def huber_loss(y_true, y_pred, delta=1):
-    """Keras implementation for huber loss
+def huber_loss(y_true, y_pred, delta=1.0):
+    """ Torch implementation for huber loss
     loss = {
         0.5 * (y_true - y_pred)**2 if abs(y_true - y_pred) < delta
         delta * (abs(y_true - y_pred) - 0.5 * delta) otherwise
@@ -37,12 +32,12 @@ def huber_loss(y_true, y_pred, delta=1):
         loss values for all points
     """
     error = (y_true - y_pred)
-    quad_error = 0.5*tf.math.square(error)
-    lin_error = delta*(tf.math.abs(error) - 0.5*delta)
+    quad_error = 0.5 * torch.square(error) #0.5*tf.math.square(error)
+    lin_error = delta * (torch.abs(error) - 0.5 * delta) #delta*(tf.math.abs(error) - 0.5*delta)
     # quadratic error, linear error
-    return tf.where(tf.math.abs(error) < delta, quad_error, lin_error)
+    return torch.where(torch.abs(error) < delta, quad_error, lin_error)
 
-def mean_huber_loss(y_true, y_pred, delta=1):
+def mean_huber_loss(y_true, y_pred, delta=1.0):
     """Calculates the mean value of huber loss
 
     Parameters
@@ -59,7 +54,7 @@ def mean_huber_loss(y_true, y_pred, delta=1):
     loss : Tensor
         average loss across points
     """
-    return tf.reduce_mean(huber_loss(y_true, y_pred, delta))
+    return torch.mean(huber_loss(y_true, y_pred, delta))
 
 class Agent():
     """Base class for all agents
@@ -282,14 +277,19 @@ class DeepQLearningAgent(Agent):
         Agent.__init__(self, board_size=board_size, frames=frames, buffer_size=buffer_size,
                  gamma=gamma, n_actions=n_actions, use_target_net=use_target_net,
                  version=version)
+        
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.optimizer = None
         self.reset_models()
 
     def reset_models(self):
         """ Reset all the models by creating new graphs"""
-        self._model = self._agent_model()
+        self._model = self._agent_model().to(self.device)
         if(self._use_target_net):
-            self._target_net = self._agent_model()
+            self._target_net = self._agent_model().to(self.device)
             self.update_target_net()
+
+        self.optimizer = torch.optim.RMSprop(self._model.parameters(), lr=5e-4)
 
     def _prepare_input(self, board):
         """Reshape input and normalize
@@ -330,7 +330,12 @@ class DeepQLearningAgent(Agent):
         # the default model to use
         if model is None:
             model = self._model
-        model_outputs = model.predict_on_batch(board)
+        
+        model.eval()
+        model_outputs = None
+        x = torch.from_numpy(board).float().to(self.device)
+        with torch.no_grad():
+            model_outputs = model(x).cpu().numpy()
         return model_outputs
 
     def _normalize_board(self, board):
@@ -374,48 +379,16 @@ class DeepQLearningAgent(Agent):
 
         Returns
         -------
-        model : TensorFlow Graph
-            DQN model graph
+        model : PyTorch Module
+            DQN model
         """
-        # define the input layer, shape is dependent on the board size and frames
-        with open('model_config/{:s}.json'.format(self._version), 'r') as f:
-            m = json.loads(f.read())
+        model = dqn_torch.DQN(self._version, self._board_size, self._n_frames, self._n_actions)
         
-        input_board = Input((self._board_size, self._board_size, self._n_frames,), name='input')
-        x = input_board
-        for layer in m['model']:
-            l = m['model'][layer]
-            if('Conv2D' in layer):
-                # add convolutional layer
-                x = Conv2D(**l)(x)
-            if('Flatten' in layer):
-                x = Flatten()(x)
-            if('Dense' in layer):
-                x = Dense(**l)(x)
-        out = Dense(self._n_actions, activation='linear', name='action_values')(x)
-        model = Model(inputs=input_board, outputs=out)
-        model.compile(optimizer=RMSprop(0.0005), loss=mean_huber_loss)
-                
-        """
-        input_board = Input((self._board_size, self._board_size, self._n_frames,), name='input')
-        x = Conv2D(16, (3,3), activation='relu', data_format='channels_last')(input_board)
-        x = Conv2D(32, (3,3), activation='relu', data_format='channels_last')(x)
-        x = Conv2D(64, (6,6), activation='relu', data_format='channels_last')(x)
-        x = Flatten()(x)
-        x = Dense(64, activation = 'relu', name='action_prev_dense')(x)
-        # this layer contains the final output values, activation is linear since
-        # the loss used is huber or mse
-        out = Dense(self._n_actions, activation='linear', name='action_values')(x)
-        # compile the model
-        model = Model(inputs=input_board, outputs=out)
-        model.compile(optimizer=RMSprop(0.0005), loss=mean_huber_loss)
-        # model.compile(optimizer=RMSprop(0.0005), loss='mean_squared_error')
-        """
-
         return model
 
+    """
     def set_weights_trainable(self):
-        """Set selected layers to non trainable and compile the model"""
+        Set selected layers to non trainable and compile the model
         for layer in self._model.layers:
             layer.trainable = False
         # the last dense layers should be trainable
@@ -423,7 +396,7 @@ class DeepQLearningAgent(Agent):
             self._model.get_layer(s).trainable = True
         self._model.compile(optimizer = self._model.optimizer, 
                             loss = self._model.loss)
-
+    """
 
     def get_action_proba(self, board, values=None):
         """Returns the action probability values using the DQN model
@@ -466,9 +439,11 @@ class DeepQLearningAgent(Agent):
             assert isinstance(iteration, int), "iteration should be an integer"
         else:
             iteration = 0
-        self._model.save_weights("{}/model_{:04d}.h5".format(file_path, iteration))
+
+        torch.save(self._model.state_dict(), "{}/model_{:04d}.h5".format(file_path, iteration))
+
         if(self._use_target_net):
-            self._target_net.save_weights("{}/model_{:04d}_target.h5".format(file_path, iteration))
+            torch.save(self._target_net.state_dict(), "{}/model_{:04d}_target.h5".format(file_path, iteration))
 
     def load_model(self, file_path='', iteration=None):
         """ load any existing models, if available """
@@ -492,18 +467,19 @@ class DeepQLearningAgent(Agent):
             assert isinstance(iteration, int), "iteration should be an integer"
         else:
             iteration = 0
-        self._model.load_weights("{}/model_{:04d}.h5".format(file_path, iteration))
+
+        self._model.load_state_dict(torch.load("{}/model_{:04d}.h5".format(file_path, iteration), self.device))
+
         if(self._use_target_net):
-            self._target_net.load_weights("{}/model_{:04d}_target.h5".format(file_path, iteration))
-        # print("Couldn't locate models at {}, check provided path".format(file_path))
+            self._target_net.load_state_dict(torch.load("{}/model_{:04d}_target.h5".format(file_path, iteration), self.device))
 
     def print_models(self):
         """Print the current models using summary method"""
         print('Training Model')
-        print(self._model.summary())
+        print(self._model)
         if(self._use_target_net):
             print('Target Network')
-            print(self._target_net.summary())
+            print(self._target_net)
 
     def train_agent(self, batch_size=32, num_games=1, reward_clip=False):
         """Train the model by sampling from buffer and return the error.
@@ -534,11 +510,15 @@ class DeepQLearningAgent(Agent):
             loss : float
             The current error (error metric is defined in reset_models)
         """
+
         s, a, r, next_s, done, legal_moves = self._buffer.sample(batch_size)
-        if(reward_clip):
+
+        if reward_clip:
             r = np.sign(r)
+
         # calculate the discounted reward, and then train accordingly
         current_model = self._target_net if self._use_target_net else self._model
+
         next_model_outputs = self._get_model_outputs(next_s, current_model)
         # our estimate of expexted future discounted reward
         discounted_reward = r + \
@@ -550,9 +530,24 @@ class DeepQLearningAgent(Agent):
         # we bother only with the difference in reward estimate at the selected action
         target = (1-a)*target + a*discounted_reward
         # fit
-        loss = self._model.train_on_batch(self._normalize_board(s), target)
-        # loss = round(loss, 5)
-        return loss
+        state_norm = self._normalize_board(s)
+        state = torch.from_numpy(state_norm).float().to(self.device)
+        y_target = torch.from_numpy(target).float().to(self.device)
+
+        # Torch forward -> loss -> backprop
+        # Forward
+        self._model.train()
+        y_pred = self._model(state)
+
+        # Loss
+        loss = mean_huber_loss(y_target, y_pred)
+
+        # Backprop
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        return loss.item()
 
     def update_target_net(self):
         """Update the weights of the target network, which is kept
@@ -560,12 +555,15 @@ class DeepQLearningAgent(Agent):
         This should not be updated very frequently
         """
         if(self._use_target_net):
-            self._target_net.set_weights(self._model.get_weights())
+            self._target_net.load_state_dict(self._model.state_dict())
+
+    """
+    * Don't need these utils for our PyTorch port *
 
     def compare_weights(self):
-        """Simple utility function to heck if the model and target 
+        Simple utility function to heck if the model and target 
         network have the same weights or not
-        """
+        
         for i in range(len(self._model.layers)):
             for j in range(len(self._model.layers[i].weights)):
                 c = (self._model.layers[i].weights[j].numpy() == \
@@ -573,13 +571,14 @@ class DeepQLearningAgent(Agent):
                 print('Layer {:d} Weights {:d} Match : {:d}'.format(i, j, int(c)))
 
     def copy_weights_from_agent(self, agent_for_copy):
-        """Update weights between competing agents which can be used
+        Update weights between competing agents which can be used
         in parallel training
-        """
+        
         assert isinstance(agent_for_copy, self), "Agent type is required for copy"
 
         self._model.set_weights(agent_for_copy._model.get_weights())
         self._target_net.set_weights(agent_for_copy._model_pred.get_weights())
+    """
 
 class PolicyGradientAgent(DeepQLearningAgent):
     """This agent learns via Policy Gradient method

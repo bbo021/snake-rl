@@ -33,7 +33,7 @@ import time
 from tqdm import tqdm
 
 board_size = 10
-version = 'v17.1'
+version = 'v17.1-torch'
 total_boards = 40
 track_index = 1000
 set_seed = True
