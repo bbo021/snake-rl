@@ -2,25 +2,6 @@ import torch
 import torch.nn as nn
 import json
 
-"""
-Reference-code to building the model from json in original tensorflow agent.py:
-
-input_board is some tmp Input() from tensorflow to pass through the net
-x = input_board
-for layer in m['model']:
-    l = m['model'][layer]
-    if('Conv2D' in layer):
-        # add convolutional layer
-        x = Conv2D(**l)(x)
-    if('Flatten' in layer):
-        x = Flatten()(x)
-    if('Dense' in layer):
-        x = Dense(**l)(x)
-out = Dense(self._n_actions, activation='linear', name='action_values')(x)
-model = Model(inputs=input_board, outputs=out)
-model.compile(optimizer=RMSprop(0.0005), loss=mean_huber_loss)
-"""
-
 class DQN(nn.Module):
     """
     Deep-Q NN to represent the model in /model_config/v17.1.json

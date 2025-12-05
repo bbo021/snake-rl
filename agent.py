@@ -32,8 +32,8 @@ def huber_loss(y_true, y_pred, delta=1.0):
         loss values for all points
     """
     error = (y_true - y_pred)
-    quad_error = 0.5 * torch.square(error) #0.5*tf.math.square(error)
-    lin_error = delta * (torch.abs(error) - 0.5 * delta) #delta*(tf.math.abs(error) - 0.5*delta)
+    quad_error = 0.5 * torch.square(error)
+    lin_error = delta * (torch.abs(error) - 0.5 * delta)
     # quadratic error, linear error
     return torch.where(torch.abs(error) < delta, quad_error, lin_error)
 
@@ -512,17 +512,15 @@ class DeepQLearningAgent(Agent):
         """
 
         s, a, r, next_s, done, legal_moves = self._buffer.sample(batch_size)
-
         if reward_clip:
             r = np.sign(r)
-
         # calculate the discounted reward, and then train accordingly
         current_model = self._target_net if self._use_target_net else self._model
 
         next_model_outputs = self._get_model_outputs(next_s, current_model)
         # our estimate of expexted future discounted reward
         discounted_reward = r + \
-            (self._gamma * np.max(np.where(legal_moves==1, next_model_outputs, -np.inf), 
+            (self._gamma * np.max(np.where(legal_moves==1, next_model_outputs, -1e10),
                                   axis = 1)\
                                   .reshape(-1, 1)) * (1-done)
         # create the target variable, only the column with action has different value
